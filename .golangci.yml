@@ -1,0 +1,35 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 3m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gofmt
+    - goimports
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - disableStutteringCheck
+  goimports:
+    local-prefixes: github.com/kiwamizamurai/nngo
+
+issues:
+  exclude-rules:
+    # WASM entrypoint funcs take ignored js args
+    - path: cmd/wasm/
+      linters:
+        - revive

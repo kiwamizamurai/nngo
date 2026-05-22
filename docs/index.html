@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nngo - Neural Network in Go (WASM)</title>
+<style>
+  body.dark {
+    --bg: #0e0e10; --fg: #e8e8ea; --sub: #888; --card: #1c1c1f;
+    --border: #2a2a2e; --plot-bg: #111;
+  }
+  body.light {
+    --bg: #fafafa; --fg: #1a1a1a; --sub: #666; --card: #ffffff;
+    --border: #e2e2e2; --plot-bg: #f3f3f3;
+  }
+
+  html, body { max-width: 100%; overflow-x: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    transition: background 0.2s, color 0.2s;
+  }
+  .container { max-width: 1200px; margin-inline: auto; }
+
+  /* canvas をレスポンシブに (アスペクト比1:1を維持) */
+  canvas#cv {
+    width: 100%; max-width: 400px; height: auto; aspect-ratio: 1/1;
+  }
+
+  /* 横スクロール許容ゾーン */
+  .math-section, .nn-diagram-box, .matrix-host {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* スマホ */
+  @media (max-width: 640px) {
+    body { padding: 12px; }
+    h1 { font-size: 1.15rem; }
+    h2 { font-size: 0.95rem; }
+    .topbar { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .row { flex-direction: column; gap: 16px; }
+    .controls { width: 100%; min-width: 0; }
+    .layer-chain { padding: 8px; gap: 6px; }
+    .chip { min-width: 56px; padding: 6px 8px; }
+    .chip .size-input { width: 40px; font-size: 0.9rem; }
+    .arrow { font-size: 1rem; }
+    #nn-diagram { min-width: 480px; height: 280px; }
+    .math-row { flex-direction: column; gap: 2px; padding: 8px 0; }
+    .math-label { min-width: 0; }
+    .param-grid { gap: 12px; }
+    .param-box { padding: 10px; max-width: 100%; }
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 24px 0 12px; }
+  .sub { color: var(--sub); font-size: 0.9rem; margin-bottom: 16px; }
+
+  .topbar { display: flex; justify-content: space-between; align-items: center; }
+  .theme-toggle {
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    padding: 4px 12px; border-radius: 16px; cursor: pointer; font-size: 0.85rem;
+  }
+
+  .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  canvas#cv { background: var(--plot-bg); border-radius: 8px; image-rendering: pixelated; }
+  .controls { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; min-width: 240px; }
+  .controls label { font-size: 0.85rem; color: var(--sub); }
+  .controls input {
+    width: 100%; padding: 4px 6px;
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  button {
+    padding: 6px 14px; cursor: pointer;
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  button:hover { border-color: var(--sub); }
+  button.preset { font-size: 0.7rem; padding: 3px 8px; }
+
+  /* ── 層構成チェーンUI ── */
+  .layer-chain {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 12px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chip {
+    display: inline-flex; flex-direction: column; align-items: center;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; min-width: 64px;
+    user-select: none; position: relative;
+  }
+  .chip.fixed {
+    background: rgba(127,127,127,0.1); cursor: default;
+    border-style: dashed;
+  }
+  .chip.hidden-layer { cursor: grab; }
+  .chip.hidden-layer.dragging { opacity: 0.4; cursor: grabbing; }
+  .chip.drop-target { outline: 2px dashed #4e79a7; }
+  .chip .label { font-size: 0.7rem; color: var(--sub); font-family: ui-monospace, Menlo, monospace; }
+  .chip .size-input {
+    width: 48px; text-align: center; border: none; background: transparent;
+    font-size: 1rem; color: var(--fg); font-weight: 600;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .chip .size-input:focus { outline: 1px solid var(--sub); border-radius: 3px; }
+  .chip .del {
+    position: absolute; top: -8px; right: -8px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #e15759; color: white; border: none;
+    font-size: 0.7rem; line-height: 1; padding: 0; cursor: pointer;
+    display: none;
+  }
+  .chip.hidden-layer:hover .del { display: block; }
+  .chip .fixed-size { font-size: 1rem; font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+  .arrow { color: var(--sub); font-size: 1.2rem; }
+  .add-layer {
+    border: 1px dashed var(--sub); background: transparent; color: var(--sub);
+    border-radius: 8px; padding: 12px 14px; cursor: pointer; font-size: 1.2rem;
+    min-width: 40px;
+  }
+  .add-layer:hover { background: rgba(127,127,127,0.1); color: var(--fg); }
+
+  /* ── NN 図 (SVG) ── */
+  .nn-diagram-box {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; margin-top: 12px;
+    overflow-x: auto;
+  }
+  #nn-diagram {
+    display: block; width: 100%; height: 340px;
+    min-width: 600px;
+  }
+  #nn-diagram circle.neuron {
+    fill: var(--card); stroke: var(--fg); stroke-width: 1.5;
+    transition: r 0.2s;
+  }
+  #nn-diagram circle.neuron:hover { r: 11; }
+  #nn-diagram text { fill: var(--sub); font-family: ui-monospace, Menlo, monospace; }
+  .stat { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; grid-column: 1 / -1; }
+
+  /* ── 数式 ── */
+  .math-section {
+    background: var(--card); border: 1px solid var(--border);
+    padding: 16px 20px; border-radius: 8px; margin-top: 16px;
+  }
+  .math-section h3 { font-size: 0.9rem; margin: 0 0 8px; }
+  .math-row {
+    display: flex; gap: 16px; align-items: baseline;
+    border-bottom: 1px dashed var(--border); padding: 6px 0;
+  }
+  .math-row:last-child { border-bottom: none; }
+  .math-label { color: var(--sub); font-size: 0.8rem; min-width: 80px; }
+  .math-row .var, .math-row code {
+    background: rgba(127,127,127,0.15); padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+
+  /* ── パラメータ (行列) ── */
+  .param-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .param-box {
+    background: var(--card); border: 1px solid var(--border);
+    padding: 12px 14px; border-radius: 8px;
+    display: inline-flex; flex-direction: column; gap: 8px;
+  }
+  .param-box h3 { font-size: 0.9rem; margin: 0; font-family: ui-monospace, Menlo, monospace; }
+  .param-box .meta { font-size: 0.72rem; color: var(--sub); font-family: ui-monospace, Menlo, monospace; }
+  .matrix-host { overflow: auto; max-width: 760px; }
+  .legend { font-size: 0.72rem; color: var(--sub); max-width: 320px; }
+
+  /* 行列の角ブラケット [ ] */
+  .matrix-outer {
+    display: inline-flex; align-items: stretch; padding: 4px 0;
+  }
+  .bracket {
+    width: 6px; flex-shrink: 0;
+    border: 2px solid var(--fg);
+  }
+  .bracket.left  { border-right: none; margin-right: 4px; }
+  .bracket.right { border-left:  none; margin-left:  4px; }
+
+  .matrix-inner {
+    display: inline-grid; gap: 2px;
+  }
+  .cell {
+    display: flex; align-items: center; justify-content: center;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.72rem;
+    border-radius: 2px;
+    min-width: 52px; min-height: 26px;
+    padding: 0 6px;
+  }
+  .cell.compact { min-width: 14px; min-height: 14px; padding: 0; font-size: 0; }
+</style>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
+</head>
+<body class="dark">
+<div class="container">
+
+  <div class="topbar">
+    <div>
+      <h1>nngo — Neural Network in Go (WASM)</h1>
+    </div>
+    <button class="theme-toggle" id="themeToggle">☀ light</button>
+  </div>
+
+  <!-- ── 層構成 (チェーンUI) ── -->
+  <h2 style="margin-top:16px;">層構成</h2>
+  <div class="sub" style="margin-bottom:8px;">
+    チップをドラッグで並べ替え / × で削除 / + で追加 / 数値クリックでサイズ編集。
+    変更すると自動で reset されます。
+  </div>
+  <div class="layer-chain" id="layer-chain"></div>
+
+  <div class="presets" style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+    <span class="sub" style="font-size:0.75rem;">プリセット:</span>
+    <button class="preset" data-v="8">2層 (8)</button>
+    <button class="preset" data-v="8,8">3層 (8,8)</button>
+    <button class="preset" data-v="16,8,4">4層 (16,8,4)</button>
+    <button class="preset" data-v="16,16,8,4">5層</button>
+
+    <span class="sub" style="font-size:0.75rem; margin-left:16px;">活性化:</span>
+    <select id="activation" style="background:var(--card); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:4px 8px;">
+      <option value="sigmoid">sigmoid</option>
+      <option value="relu">ReLU</option>
+      <option value="tanh">tanh</option>
+    </select>
+
+    <span class="sub" style="font-size:0.75rem;">損失:</span>
+    <select id="loss" style="background:var(--card); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:4px 8px;">
+      <option value="mse">MSE (出力sigmoid)</option>
+      <option value="ce">CrossEntropy (出力softmax)</option>
+    </select>
+  </div>
+
+  <!-- ── 論文風 NN 図 ── -->
+  <div class="nn-diagram-box">
+    <svg id="nn-diagram" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <!-- ── 学習可視化 ── -->
+  <h2>学習</h2>
+  <div class="row">
+    <canvas id="cv" width="400" height="400"></canvas>
+    <div class="controls">
+      <label>lr</label>         <input id="lr" type="number" value="1.0" step="0.1">
+      <label>steps/frame</label><input id="steps" type="number" value="20" min="1" max="200">
+
+      <div style="grid-column:1/-1; display:flex; gap:8px; margin-top:4px;">
+        <button id="reset">reset</button>
+        <button id="toggle">start</button>
+      </div>
+
+      <div class="stat" id="stat" style="grid-column:1/-1;">loading wasm…</div>
+      <div class="sub" id="arch" style="grid-column:1/-1; font-size:0.75rem;"></div>
+    </div>
+  </div>
+
+  <!-- ── 数式 (任意層数 L) ── -->
+  <div class="math-section">
+    <h3>このネットワークで起きていること</h3>
+
+    <div class="math-row">
+      <div class="math-label">入力</div>
+      <div>$X_0 \in \mathbb{R}^{N\times \text{id}}$, ターゲット $T$ (one-hot, $N\times \text{od}$)</div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">順伝播</div>
+      <div>
+        $X_l = f_l(X_{l-1} W_l + b_l)$ &nbsp;($l = 1, 2, \ldots, L$)<br>
+        <span style="font-size:0.85em; color:var(--sub);">
+          $L$ = 層数 (入力以外の Linear 層の総数), &nbsp;
+          $X_L$ = 出力, &nbsp;
+          $f_l$ = 活性化関数
+        </span>
+      </div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">活性化</div>
+      <div>$f_l = \sigma$ (sigmoid), &nbsp; $\sigma'(z) = X(1-X)$</div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">損失</div>
+      <div id="loss-formula">
+        $\displaystyle E = \tfrac{1}{2}\|X_L - T\|_2^2$ &nbsp; <span class="var">MSE</span>
+      </div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">逆伝播</div>
+      <div>
+        <div id="delta-L-formula">$\delta_L = (X_L - T) \odot X_L \odot (1-X_L)$</div>
+        $\delta_{l-1} = (\delta_l W_l^\top) \odot f_{l-1}'(X_{l-1})$
+      </div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">勾配</div>
+      <div>$\nabla W_l = X_{l-1}^\top \delta_l$, &nbsp; $\nabla b_l = \mathbf{1}^\top \delta_l$</div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">更新</div>
+      <div>$W_l \leftarrow W_l - \eta\, \nabla W_l$ &nbsp; (SGD, <code>η = lr</code>)</div>
+    </div>
+
+    <div class="math-row">
+      <div class="math-label">層構成</div>
+      <div id="arch-math">(reset時に更新)</div>
+    </div>
+  </div>
+
+  <!-- ── パラメータ (層数に応じて動的生成) ── -->
+  <h2>パラメータ (色: <span style="color:#4e79a7">青=負</span> / <span style="color:#e15759">赤=正</span> + 実数値)</h2>
+  <div class="sub" style="margin-bottom:12px;">
+    各層の重み行列 $W_l$ とバイアス $b_l$ をリアルタイム表示。
+    層が多い/サイズが大きいと数値は省略され色のみになります。
+  </div>
+  <div class="param-grid" id="params-host"></div>
+
+</div>
+
+<script src="wasm_exec.js"></script>
+<script>
+(async () => {
+  // ── テーマ ──
+  const themeBtn = document.getElementById('themeToggle');
+  function setTheme(name) {
+    document.body.classList.remove('dark', 'light');
+    document.body.classList.add(name);
+    themeBtn.textContent = name === 'dark' ? '☀ light' : '☾ dark';
+    localStorage.setItem('nngo-theme', name);
+    if (data) { drawParams(); draw(lastLoss); }
+  }
+
+  // ── WASM ロード ──
+  const stat = document.getElementById('stat');
+  const go = new Go();
+  let res;
+  try {
+    res = await WebAssembly.instantiateStreaming(fetch('nngo.wasm'), go.importObject);
+  } catch (e) {
+    stat.textContent = 'wasm load failed: ' + e.message;
+    throw e;
+  }
+  go.run(res.instance);
+  stat.textContent = 'ready';
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const BOUND = 1.1;
+  const GRID = 80;
+
+  const colors = ['#e15759','#4e79a7','#59a14f','#f28e2c','#b07aa1'];
+  const colorsBg = ['rgba(225,87,89,0.30)','rgba(78,121,167,0.30)','rgba(89,161,79,0.30)'];
+
+  let data, step = 0, lossHistory = [], running = false, lastLoss = 0;
+
+  function isDark() { return document.body.classList.contains('dark'); }
+  function colorFor(v, vmax) {
+    if (vmax === 0) return isDark() ? 'hsl(0,0%,18%)' : 'hsl(0,0%,92%)';
+    const t = Math.max(-1, Math.min(1, v / vmax));
+    const mag = Math.abs(t);
+    const hue = t >= 0 ? 6 : 215;
+    const sat = 35 + mag * 60;
+    const light = isDark() ? (20 + mag * 40) : (96 - mag * 50);
+    return `hsl(${hue}, ${sat}%, ${light}%)`;
+  }
+  function textColorFor(v, vmax) {
+    if (vmax === 0) return isDark() ? '#888' : '#777';
+    const mag = Math.abs(v / vmax);
+    if (isDark()) return mag > 0.4 ? '#fff' : '#ccc';
+    return mag > 0.4 ? '#fff' : '#222';
+  }
+
+  // ── 行列描画 (HTML grid + 数値) ──
+  function renderMatrix(hostId, metaId, arr, rows, cols) {
+    const host = document.getElementById(hostId);
+    host.innerHTML = '';
+
+    // セルが多すぎる場合は数値非表示モード
+    const totalCells = rows * cols;
+    const compact = totalCells > 60 || cols > 12;
+
+    let vmax = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const a = Math.abs(arr[i]);
+      if (a > vmax) vmax = a;
+    }
+
+    const outer = document.createElement('div');
+    outer.className = 'matrix-outer';
+
+    const lb = document.createElement('div'); lb.className = 'bracket left'; outer.appendChild(lb);
+
+    const inner = document.createElement('div');
+    inner.className = 'matrix-inner';
+    inner.style.gridTemplateColumns = `repeat(${cols}, auto)`;
+
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const v = arr[i*cols + j];
+        const c = document.createElement('div');
+        c.className = 'cell' + (compact ? ' compact' : '');
+        c.style.background = colorFor(v, vmax);
+        if (!compact) {
+          c.style.color = textColorFor(v, vmax);
+          // 値の大きさに応じて表示桁を調整
+          c.textContent = Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+        }
+        c.title = `[${i},${j}] = ${v.toFixed(6)}`;
+        inner.appendChild(c);
+      }
+    }
+    outer.appendChild(inner);
+
+    const rb = document.createElement('div'); rb.className = 'bracket right'; outer.appendChild(rb);
+    host.appendChild(outer);
+
+    let sum = 0, min = Infinity, max = -Infinity;
+    for (const v of arr) { sum += v; if (v < min) min = v; if (v > max) max = v; }
+    document.getElementById(metaId).textContent =
+      `[${rows}×${cols}]  min ${min.toFixed(3)}  max ${max.toFixed(3)}  mean ${(sum/arr.length).toFixed(3)}`;
+  }
+
+  // ── レイヤ構成 状態 (隠れ層サイズの配列) ──
+  let hiddenLayers = [3, 3];   // デフォルト: 2隠れ層 [3, 3] → 全体 [2,3,3,3]
+
+  function parseLayers() {
+    return [2, ...hiddenLayers, 3];   // 入力=2 (x,y), 出力=3 (クラス)
+  }
+
+  // ── 層チェーン描画 ──
+  let dragSrcIdx = null;
+  function renderLayerChain() {
+    const chain = document.getElementById('layer-chain');
+    chain.innerHTML = '';
+
+    // 入力チップ (固定)
+    chain.appendChild(makeFixedChip('input', 2));
+    chain.appendChild(makeArrow());
+
+    // 隠れ層チップ群
+    hiddenLayers.forEach((size, idx) => {
+      chain.appendChild(makeHiddenChip(size, idx));
+      chain.appendChild(makeArrow());
+    });
+
+    // + ボタン
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-layer';
+    addBtn.textContent = '+';
+    addBtn.title = '層を追加';
+    addBtn.onclick = () => {
+      hiddenLayers.push(3);
+      renderLayerChain();
+      reset();
+    };
+    chain.appendChild(addBtn);
+
+    chain.appendChild(makeArrow());
+
+    // 出力チップ (固定)
+    chain.appendChild(makeFixedChip('output', 3));
+  }
+
+  function makeFixedChip(label, size) {
+    const c = document.createElement('div');
+    c.className = 'chip fixed';
+    c.innerHTML = `<span class="label">${label}</span><span class="fixed-size">${size}</span>`;
+    return c;
+  }
+
+  function makeArrow() {
+    const a = document.createElement('span');
+    a.className = 'arrow';
+    a.textContent = '→';
+    return a;
+  }
+
+  function makeHiddenChip(size, idx) {
+    const c = document.createElement('div');
+    c.className = 'chip hidden-layer';
+    c.draggable = true;
+    c.dataset.idx = idx;
+
+    c.innerHTML = `
+      <button class="del" title="この層を削除">×</button>
+      <span class="label">h${idx + 1}</span>
+      <input class="size-input" type="number" min="1" max="128" value="${size}">
+    `;
+
+    // サイズ編集
+    const input = c.querySelector('.size-input');
+    input.onchange = () => {
+      const v = parseInt(input.value, 10);
+      if (Number.isFinite(v) && v >= 1) {
+        hiddenLayers[idx] = v;
+        reset();
+      }
+    };
+
+    // 削除
+    c.querySelector('.del').onclick = (e) => {
+      e.stopPropagation();
+      hiddenLayers.splice(idx, 1);
+      renderLayerChain();
+      reset();
+    };
+
+    // ドラッグ並べ替え
+    c.ondragstart = (e) => {
+      dragSrcIdx = idx;
+      c.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    };
+    c.ondragend = () => {
+      c.classList.remove('dragging');
+      document.querySelectorAll('.chip.drop-target').forEach(el => el.classList.remove('drop-target'));
+    };
+    c.ondragover = (e) => {
+      if (dragSrcIdx === null || dragSrcIdx === idx) return;
+      e.preventDefault();
+      c.classList.add('drop-target');
+    };
+    c.ondragleave = () => c.classList.remove('drop-target');
+    c.ondrop = (e) => {
+      e.preventDefault();
+      if (dragSrcIdx === null || dragSrcIdx === idx) return;
+      const moved = hiddenLayers.splice(dragSrcIdx, 1)[0];
+      hiddenLayers.splice(idx, 0, moved);
+      dragSrcIdx = null;
+      renderLayerChain();
+      reset();
+    };
+
+    return c;
+  }
+
+  // ── 層数に応じた param-box を構築 ──
+  function buildParamBoxes(numLayers) {
+    const host = document.getElementById('params-host');
+    host.innerHTML = '';
+    for (let l = 1; l <= numLayers; l++) {
+      const wBox = document.createElement('div');
+      wBox.className = 'param-box';
+      wBox.innerHTML = `
+        <h3>$W_{${l}}$</h3>
+        <div class="meta" id="W${l}-meta"></div>
+        <div class="matrix-host" id="W${l}-host"></div>
+      `;
+      host.appendChild(wBox);
+
+      const bBox = document.createElement('div');
+      bBox.className = 'param-box';
+      bBox.innerHTML = `
+        <h3>$b_{${l}}$</h3>
+        <div class="meta" id="B${l}-meta"></div>
+        <div class="matrix-host" id="B${l}-host"></div>
+      `;
+      host.appendChild(bBox);
+    }
+    // MathJax 再レンダリング
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise([host]);
+    }
+  }
+
+  function drawParams() {
+    if (!window.nngo) return;
+    const p = window.nngo.getParams();
+    for (let l = 1; l <= p.numLayers; l++) {
+      const wName = `W${l}`, bName = `B${l}`;
+      renderMatrix(`${wName}-host`, `${wName}-meta`, p[wName], p.shapes[wName].rows, p.shapes[wName].cols);
+      renderMatrix(`${bName}-host`, `${bName}-meta`, p[bName], p.shapes[bName].rows, p.shapes[bName].cols);
+    }
+    // NN図のエッジ色も更新
+    renderDiagram(parseLayers(), p);
+  }
+
+  function updateArch(layers) {
+    document.getElementById('arch').textContent =
+      `アーキテクチャ: ${layers.join(' → ')}  (L = ${layers.length - 1} 層)`;
+    const archMath = document.getElementById('arch-math');
+    if (archMath) {
+      archMath.textContent = layers.map((s, i) =>
+        i === 0 ? `\\text{id}=${s}` :
+        i === layers.length - 1 ? `\\text{od}=${s}` :
+        `h_${i}=${s}`
+      ).join(',\\quad ');
+      archMath.innerHTML = '$' + archMath.textContent + '$';
+      if (window.MathJax && window.MathJax.typesetPromise) {
+        window.MathJax.typesetPromise([archMath]);
+      }
+    }
+  }
+
+  function reset() {
+    const layers = parseLayers();
+    const activation = document.getElementById('activation').value;
+    const loss = document.getElementById('loss').value;
+    data = window.nngo.init({
+      n: 120, k: 3,
+      layers: layers,
+      activation: activation,
+      loss: loss,
+      lr: +document.getElementById('lr').value,
+      seed: 1,
+    });
+    step = 0; lossHistory = []; lastLoss = 0;
+    running = false;
+    document.getElementById('toggle').textContent = 'start';
+    buildParamBoxes(layers.length - 1);
+    updateArch(layers);
+    updateLossFormula(loss);
+    renderDiagram(layers, null);
+    draw(0);
+    drawParams();
+  }
+
+  // 損失/出力活性化の選択に応じて数式表示を切替
+  function updateLossFormula(loss) {
+    const lossEl = document.getElementById('loss-formula');
+    const deltaEl = document.getElementById('delta-L-formula');
+    if (loss === 'ce') {
+      lossEl.innerHTML = `$\\displaystyle E = -\\sum_{i,j} T_{ij}\\log P_{ij}$ &nbsp; <span class="var">CrossEntropy</span>, &nbsp; $P = \\mathrm{softmax}(Z_L)$`;
+      deltaEl.innerHTML = `$\\delta_L = P - T$ &nbsp; (softmax の Jacobian と CE が打ち消し合う)`;
+    } else {
+      lossEl.innerHTML = `$\\displaystyle E = \\tfrac{1}{2}\\|X_L - T\\|_2^2$ &nbsp; <span class="var">MSE</span>, &nbsp; 出力 $= \\sigma(Z_L)$`;
+      deltaEl.innerHTML = `$\\delta_L = (X_L - T) \\odot X_L \\odot (1-X_L)$`;
+    }
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise([lossEl, deltaEl]);
+    }
+  }
+
+  // ── 論文風 NN 図 (SVG) ──
+  // layers = [in, h1, ..., out], params = nngo.getParams() の結果 (null可)
+  function renderDiagram(layers, params) {
+    const svg = document.getElementById('nn-diagram');
+    const w = svg.clientWidth || 800;
+    const h = 340;
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.innerHTML = '';
+    const ns = 'http://www.w3.org/2000/svg';
+
+    const L = layers.length;
+    const xPad = 80;
+    const xStep = (w - 2*xPad) / Math.max(1, L - 1);
+    const visibleCap = 12; // 1層あたり描画する最大ニューロン数
+
+    // ニューロン位置を計算
+    const positions = layers.map((sz, l) => {
+      const visible = Math.min(sz, visibleCap);
+      const r = visible > 8 ? 6 : (visible > 4 ? 9 : 12);
+      const gap = visible > 8 ? 18 : (visible > 4 ? 24 : 30);
+      const totalH = (visible - 1) * gap;
+      const startY = h/2 - totalH/2;
+      const xpos = xPad + l * xStep;
+      return Array.from({length: visible}, (_, i) => ({ x: xpos, y: startY + i*gap, r }));
+    });
+
+    // ── エッジ (全結合線) ──
+    for (let l = 0; l < L - 1; l++) {
+      const W = params && params[`W${l+1}`];
+      const realRows = layers[l], realCols = layers[l+1];
+      let vmax = 0;
+      if (W) for (let i = 0; i < W.length; i++) { const a = Math.abs(W[i]); if (a > vmax) vmax = a; }
+
+      const fromVis = positions[l].length;
+      const toVis = positions[l+1].length;
+      for (let i = 0; i < fromVis; i++) {
+        for (let j = 0; j < toVis; j++) {
+          const line = document.createElementNS(ns, 'line');
+          line.setAttribute('x1', positions[l][i].x + positions[l][i].r);
+          line.setAttribute('y1', positions[l][i].y);
+          line.setAttribute('x2', positions[l+1][j].x - positions[l+1][j].r);
+          line.setAttribute('y2', positions[l+1][j].y);
+
+          if (W && i < realRows && j < realCols && vmax > 0) {
+            const v = W[i*realCols + j];
+            const t = v / vmax;
+            const color = t >= 0 ? '#e15759' : '#4e79a7';
+            line.setAttribute('stroke', color);
+            line.setAttribute('stroke-opacity', Math.max(0.08, Math.abs(t) * 0.85).toFixed(2));
+            line.setAttribute('stroke-width', (0.4 + Math.abs(t) * 2.4).toFixed(2));
+          } else {
+            line.setAttribute('stroke', isDark() ? '#888' : '#999');
+            line.setAttribute('stroke-opacity', '0.15');
+            line.setAttribute('stroke-width', '0.8');
+          }
+          svg.appendChild(line);
+        }
+      }
+    }
+
+    // ── ニューロン (前面に上書き) ──
+    for (let l = 0; l < L; l++) {
+      for (let i = 0; i < positions[l].length; i++) {
+        const p = positions[l][i];
+        const c = document.createElementNS(ns, 'circle');
+        c.setAttribute('class', 'neuron');
+        c.setAttribute('cx', p.x);
+        c.setAttribute('cy', p.y);
+        c.setAttribute('r', p.r);
+        svg.appendChild(c);
+      }
+
+      // ラベル
+      const labelText = l === 0 ? `input (${layers[l]})` :
+                        l === L-1 ? `output (${layers[l]})` :
+                        `h${l} (${layers[l]})`;
+      const label = document.createElementNS(ns, 'text');
+      label.setAttribute('x', positions[l][0].x);
+      label.setAttribute('y', h - 12);
+      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('font-size', '11');
+      label.textContent = labelText;
+      svg.appendChild(label);
+
+      // 省略表示
+      if (positions[l].length < layers[l]) {
+        const dots = document.createElementNS(ns, 'text');
+        dots.setAttribute('x', positions[l][0].x);
+        dots.setAttribute('y', positions[l][positions[l].length-1].y + 22);
+        dots.setAttribute('text-anchor', 'middle');
+        dots.setAttribute('font-size', '12');
+        dots.textContent = `+${layers[l] - positions[l].length}…`;
+        svg.appendChild(dots);
+      }
+    }
+  }
+
+  function draw(loss) {
+    lastLoss = loss;
+    const grid = window.nngo.predictGrid(BOUND, GRID);
+    const cell = W / GRID;
+    ctx.fillStyle = isDark() ? '#111' : '#f3f3f3';
+    ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < GRID; i++) {
+      for (let j = 0; j < GRID; j++) {
+        ctx.fillStyle = colorsBg[grid[i*GRID + j]] || (isDark() ? '#222' : '#ddd');
+        ctx.fillRect(j*cell, (GRID-1-i)*cell, cell+1, cell+1);
+      }
+    }
+    const N = data.y.length;
+    for (let i = 0; i < N; i++) {
+      const x = data.x[i*2], y = data.x[i*2+1];
+      const px = (x + BOUND) / (2*BOUND) * W;
+      const py = H - (y + BOUND) / (2*BOUND) * H;
+      ctx.fillStyle = colors[data.y[i]];
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI*2); ctx.fill();
+    }
+    // ── loss スパークライン (左上に小窓) ──
+    if (lossHistory.length > 1) {
+      const padX = 8, padY = 8, plotW = 130, plotH = 46;
+      // 背景パネル
+      ctx.fillStyle = isDark() ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.8)';
+      ctx.fillRect(padX-2, padY-2, plotW+4, plotH+18);
+      ctx.strokeStyle = isDark() ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
+      ctx.strokeRect(padX-2, padY-2, plotW+4, plotH+18);
+
+      // ラベル + 最新値
+      ctx.fillStyle = isDark() ? '#ccc' : '#333';
+      ctx.font = '11px ui-monospace, Menlo, monospace';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`loss ${loss.toFixed(4)}`, padX, padY + plotH + 1);
+
+      // 折れ線
+      const lh = lossHistory.slice(-200);
+      const lmax = Math.max(...lh), lmin = Math.min(...lh);
+      ctx.strokeStyle = isDark() ? '#7cd' : '#06c';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      lh.forEach((v, i) => {
+        const x = padX + (i/(lh.length-1)) * plotW;
+        const y = padY + (1 - (v-lmin)/(lmax-lmin+1e-9)) * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    document.getElementById('stat').textContent = `step ${step}  loss ${loss.toFixed(4)}`;
+  }
+
+  function tick() {
+    if (!running) return;
+    const stepsPerFrame = +document.getElementById('steps').value;
+    const loss = window.nngo.train(stepsPerFrame);
+    step += stepsPerFrame;
+    lossHistory.push(loss);
+    draw(loss);
+    drawParams();
+    requestAnimationFrame(tick);
+  }
+
+  themeBtn.onclick = () => setTheme(isDark() ? 'light' : 'dark');
+  setTheme(localStorage.getItem('nngo-theme') || 'dark');
+
+  document.getElementById('reset').onclick = reset;
+  document.getElementById('toggle').onclick = (e) => {
+    running = !running;
+    e.target.textContent = running ? 'pause' : 'start';
+    if (running) tick();
+  };
+
+  // プリセットボタン: 隠れ層配列を上書きして再描画 + reset
+  document.querySelectorAll('.preset').forEach(btn => {
+    btn.onclick = () => {
+      hiddenLayers = btn.dataset.v.split(',').map(s => parseInt(s.trim(), 10))
+                                              .filter(v => Number.isFinite(v) && v >= 1);
+      renderLayerChain();
+      reset();
+    };
+  });
+
+  // 活性化 / 損失 セレクタ → 変更で即 reset
+  document.getElementById('activation').onchange = reset;
+  document.getElementById('loss').onchange = reset;
+
+  // 初回チェーン描画
+  renderLayerChain();
+
+  reset();
+})();
+</script>
+</body>
+</html>
